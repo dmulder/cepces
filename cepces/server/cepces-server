@@ -1,0 +1,66 @@
+#!/usr/bin/python3
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import ssl
+from xml.etree import ElementTree
+import logging
+import argparse
+from cepces.soap.types import Envelope
+
+def get_logger(obj):
+    name = '{}.{}<0x{:02x}>'.format(
+        obj.__module__,
+        obj.__class__.__name__,
+        id(obj),
+    )
+    return logging.getLogger(name)
+
+
+class XCEP(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        print(self.headers)
+
+    def do_POST(self):
+        logger = get_logger(self)
+        content_type = self.headers.get('Content-Type', '')
+        if not content_type.startswith('application/soap+xml'):
+            self.send_response(400)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'Invalid Content-Type')
+            return
+
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length).decode('utf-8')
+
+        # Convert the request
+        element = ElementTree.fromstring(post_data)
+        envelope = Envelope(element)
+        logger.debug(
+            "Received message: %s",
+            ElementTree.tostring(envelope.element),
+        )
+
+
+        SimpleHTTPRequestHandler.do_GET(self)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--keyfile', help='Certificate key')
+    parser.add_argument('--certfile', help='Certificate file')
+    parser.add_argument('--port', help='Port number to serve')
+    args = parser.parse_args()
+
+    port = args.port
+    if args.certfile and args.keyfile and not port:
+        port = 443
+    elif not port:
+        port = 80
+
+    httpd = HTTPServer(('localhost', port), XCEP)
+
+    if args.certfile and args.keyfile:
+        ctx = ssl.SSLContext()
+        ctx.load_cert_chain(args.certfile, args.keyfile)
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+
+    httpd.serve_forever()
